@@ -1,13 +1,14 @@
 import { pool } from "../database/db.js";
 
-export const createVerificationToken = async (
+// Create reset OTP
+export const createPasswordResetToken = async (
   userId,
   otp,
   expiresAt
 ) => {
   const result = await pool.query(
     `
-    INSERT INTO email_verification_tokens (
+    INSERT INTO password_reset_tokens (
       user_id,
       otp,
       expires_at
@@ -21,12 +22,12 @@ export const createVerificationToken = async (
   return result.rows[0];
 };
 
-// Find OTP for a user
-export const findVerificationToken = async (userId) => {
+// Find latest reset OTP
+export const findPasswordResetToken = async (userId) => {
   const result = await pool.query(
     `
     SELECT *
-    FROM email_verification_tokens
+    FROM password_reset_tokens
     WHERE user_id = $1
     ORDER BY created_at DESC
     LIMIT 1;
@@ -36,11 +37,12 @@ export const findVerificationToken = async (userId) => {
 
   return result.rows[0];
 };
-// Delete OTP after successful verification
-export const deleteVerificationToken = async (userId) => {
+
+// Delete reset OTP
+export const deletePasswordResetToken = async (userId) => {
   await pool.query(
     `
-    DELETE FROM email_verification_tokens
+    DELETE FROM password_reset_tokens
     WHERE user_id = $1;
     `,
     [userId]
