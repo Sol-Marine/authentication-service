@@ -70,15 +70,15 @@ export async function findSessionByRefreshTokenId(refreshTokenId) {
 }
 
 
-// Deactivate a session
-export async function deactivateSession(id) {
+// Deactivate one session
+export async function deactivateSession(sessionId) {
   await pool.query(
     `
     UPDATE sessions
     SET is_active = FALSE
     WHERE id = $1;
     `,
-    [id]
+    [sessionId]
   );
 }
 
@@ -118,7 +118,7 @@ export async function updateSessionRefreshToken(
   return result.rows[0];
 }
 
-// Deactivate all sessions for a user
+// Deactivate all sessions
 export async function deactivateAllSessions(userId) {
   await pool.query(
     `

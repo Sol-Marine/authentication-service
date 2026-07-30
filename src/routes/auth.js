@@ -2,16 +2,19 @@ import { Hono } from "hono";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 
+import { authMiddleware } from "../middleware/authMiddleware.js";
+
 import {
   createSession,
   findSessionByRefreshTokenId,
   updateSessionRefreshToken,
+  deactivateSession,
   deactivateAllSessions,
 } from "../models/sessionModel.js";
 
 import {
   createRefreshToken,
-  findRefreshToken,
+  findActiveRefreshTokensByUserId,
   revokeRefreshTokenById,
   revokeAllRefreshTokens,
 } from "../models/refreshTokenModel.js";
@@ -19,9 +22,12 @@ import {
 import {
   createUser,
   findUserByEmail,
+  findUserById,
   verifyUser,
   updatePassword,
+  updateUserProfile,
 } from "../models/userModel.js";
+
 
 import {
   createVerificationToken,
@@ -362,9 +368,17 @@ const refreshTokenExpiry = new Date(
   Date.now() + 7 * 24 * 60 * 60 * 1000
 );
 
+
+// Hash refresh token before storing in database
+const refreshTokenHash = await bcrypt.hash(
+  refreshToken,
+  10
+);
+
+
 const savedRefreshToken = await createRefreshToken(
   user.id,
-  refreshToken,
+  refreshTokenHash,
   refreshTokenExpiry
 );
 
@@ -445,13 +459,35 @@ try {
 
 
 
-const storedToken = await findRefreshToken(refresh_token);
+const userRefreshTokens =
+  await findActiveRefreshTokensByUserId(
+    decoded.id
+  );
+
+
+let storedToken = null;
+
+
+for (const tokenRecord of userRefreshTokens) {
+
+  const matches = await bcrypt.compare(
+    refresh_token,
+    tokenRecord.token
+  );
+
+
+  if (matches) {
+    storedToken = tokenRecord;
+    break;
+  }
+}
+
 
 if (!storedToken) {
   return c.json(
     {
-      success: false,
-      message: "Refresh token not found.",
+      success:false,
+      message:"Refresh token not found.",
     },
     401
   );
@@ -503,6 +539,11 @@ const newRefreshToken = jwt.sign(
 );
 
 
+const newRefreshTokenHash = await bcrypt.hash(
+  newRefreshToken,
+  10
+);
+
 const newRefreshTokenExpiry = new Date(
   Date.now() + 7 * 24 * 60 * 60 * 1000
 );
@@ -510,7 +551,7 @@ const newRefreshTokenExpiry = new Date(
 
 const savedNewRefreshToken = await createRefreshToken(
   decoded.id,
-  newRefreshToken,
+  newRefreshTokenHash,
   newRefreshTokenExpiry
 );
 
@@ -565,7 +606,6 @@ auth.post("/logout", async (c) => {
 
     const { refresh_token } = await c.req.json();
 
-
     if (!refresh_token) {
       return c.json(
         {
@@ -577,9 +617,50 @@ auth.post("/logout", async (c) => {
     }
 
 
-    const storedToken = await findRefreshToken(
-      refresh_token
-    );
+    let decoded;
+
+    try {
+
+      decoded = jwt.verify(
+        refresh_token,
+        process.env.JWT_REFRESH_SECRET
+      );
+
+    } catch (error) {
+
+      return c.json(
+        {
+          success: false,
+          message: "Invalid or expired refresh token.",
+        },
+        401
+      );
+
+    }
+
+
+    const userRefreshTokens =
+      await findActiveRefreshTokensByUserId(
+        decoded.id
+      );
+
+
+    let storedToken = null;
+
+
+    for (const tokenRecord of userRefreshTokens) {
+
+      const matches = await bcrypt.compare(
+        refresh_token,
+        tokenRecord.token
+      );
+
+      if (matches) {
+        storedToken = tokenRecord;
+        break;
+      }
+
+    }
 
 
     if (!storedToken) {
@@ -593,9 +674,10 @@ auth.post("/logout", async (c) => {
     }
 
 
-    const session = await findSessionByRefreshTokenId(
-      storedToken.id
-    );
+    const session =
+      await findSessionByRefreshTokenId(
+        storedToken.id
+      );
 
 
     if (!session) {
@@ -623,7 +705,6 @@ auth.post("/logout", async (c) => {
       success: true,
       message: "Logout successful.",
     });
-
 
   } catch (error) {
 
@@ -757,6 +838,82 @@ auth.post("/forgot-password", async (c) => {
   }
 });
 
+
+// ======================
+// Verify Reset OTP
+// ======================
+
+auth.post("/verify-reset-otp", async (c) => {
+
+  try {
+
+    const { otp } = await c.req.json();
+
+    if (!otp) {
+
+      return c.json(
+        {
+          success: false,
+          message: "OTP is required.",
+        },
+        400
+      );
+
+    }
+
+    const resetToken =
+      await findPasswordResetToken(otp);
+
+    if (!resetToken) {
+
+      return c.json(
+        {
+          success: false,
+          message: "Invalid OTP.",
+        },
+        404
+      );
+
+    }
+
+    if (
+      new Date() >
+      new Date(resetToken.expires_at)
+    ) {
+
+      return c.json(
+        {
+          success: false,
+          message: "OTP has expired.",
+        },
+        401
+      );
+
+    }
+
+    return c.json({
+
+      success: true,
+      message: "OTP verified successfully.",
+
+    });
+
+  } catch (error) {
+
+    console.error(error);
+
+    return c.json(
+      {
+        success: false,
+        message: "OTP verification failed.",
+      },
+      500
+    );
+
+  }
+
+});
+
 // ======================
 // Reset Password
 // ======================
@@ -789,31 +946,31 @@ auth.post("/reset-password", async (c) => {
       );
     }
 
-    // Find reset token
-    const resetToken = await findPasswordResetToken(user.id);
+    // Find password reset token
+    const resetToken = await findPasswordResetToken(otp);
 
     if (!resetToken) {
       return c.json(
         {
           success: false,
-          message: "Password reset token not found.",
+          message: "Invalid OTP.",
         },
         404
       );
     }
 
-    // Check OTP
-    if (resetToken.otp !== otp) {
+    // Make sure the OTP belongs to this user
+    if (resetToken.user_id !== user.id) {
       return c.json(
         {
           success: false,
           message: "Invalid OTP.",
         },
-        400
+        401
       );
     }
 
-    // Check expiration
+    // Check if OTP has expired
     if (new Date() > new Date(resetToken.expires_at)) {
       return c.json(
         {
@@ -824,18 +981,31 @@ auth.post("/reset-password", async (c) => {
       );
     }
 
-    // Hash new password
-    const hashedPassword = await bcrypt.hash(new_password, 10);
+    // Hash the new password
+    const hashedPassword = await bcrypt.hash(
+      new_password,
+      10
+    );
 
-    // Update password
-    await updatePassword(user.id, hashedPassword);
+    // Update the user's password
+    await updatePassword(
+      user.id,
+      hashedPassword
+    );
 
-    // Delete reset token
+    // Delete the password reset token
     await deletePasswordResetToken(user.id);
+
+    // Revoke every refresh token
+    await revokeAllRefreshTokens(user.id);
+
+    // Deactivate every session
+    await deactivateAllSessions(user.id);
 
     return c.json({
       success: true,
-      message: "Password reset successful.",
+      message:
+        "Password reset successful. You have been logged out from all devices.",
     });
 
   } catch (error) {
@@ -850,5 +1020,102 @@ auth.post("/reset-password", async (c) => {
     );
   }
 });
+
+// ======================
+// Current User
+// ======================
+
+auth.get("/me", authMiddleware, async (c) => {
+
+  const user = c.get("user");
+
+  const currentUser = await findUserById(
+  user.id
+);
+
+  return c.json({
+    success: true,
+    user,
+  });
+
+});
+
+
+// ======================
+// Update Profile
+// ======================
+
+auth.patch("/me", authMiddleware, async (c) => {
+  try {
+
+    const user = c.get("user");
+
+    const { first_name, last_name } =
+      await c.req.json();
+
+    if (!first_name && !last_name) {
+      return c.json(
+        {
+          success: false,
+          message: "No changes provided.",
+        },
+        400
+      );
+    }
+
+    const updatedUser = await updateUserProfile(
+      user.id,
+      first_name,
+      last_name
+    );
+
+    return c.json({
+      success: true,
+      message: "Profile updated successfully.",
+      user: updatedUser,
+    });
+
+
+  } catch (error) {
+
+    console.error(error);
+
+    return c.json(
+      {
+        success: false,
+        message: "Failed to update profile.",
+      },
+      500
+    );
+
+  }
+});
+
+
+// ======================
+// Delete Account
+// ======================
+
+auth.delete("/me", authMiddleware, async (c) => {
+  try {
+
+    const user = c.get("user");
+
+
+  } catch (error) {
+
+    console.error(error);
+
+    return c.json(
+      {
+        success: false,
+        message: "Failed to delete account.",
+      },
+      500
+    );
+
+  }
+});
+
 
 export default auth;

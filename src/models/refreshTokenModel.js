@@ -1,7 +1,14 @@
 import { pool } from "../database/db.js";
 
+
 // Create a refresh token
-export async function createRefreshToken(userId, token, expiresAt) {
+// tokenHash = hashed refresh token stored in database
+export async function createRefreshToken(
+  userId,
+  tokenHash,
+  expiresAt
+) {
+
   const result = await pool.query(
     `
     INSERT INTO refresh_tokens
@@ -18,70 +25,122 @@ export async function createRefreshToken(userId, token, expiresAt) {
     )
     RETURNING *;
     `,
-    [userId, token, expiresAt]
+    [
+      userId,
+      tokenHash,
+      expiresAt
+    ]
   );
 
   return result.rows[0];
 }
 
-// Find a refresh token
-export async function findRefreshToken(token) {
+
+
+// Find all refresh tokens belonging to a user
+export async function findRefreshTokensByUserId(userId) {
+
   const result = await pool.query(
     `
     SELECT *
     FROM refresh_tokens
-    WHERE token = $1;
+    WHERE user_id = $1;
     `,
-    [token]
+    [
+      userId
+    ]
+  );
+
+  return result.rows;
+}
+
+
+
+// Find active refresh tokens belonging to a user
+// Used because tokens are now hashed
+// We cannot search by token directly
+export async function findActiveRefreshTokensByUserId(userId) {
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM refresh_tokens
+    WHERE user_id = $1
+    AND revoked = FALSE;
+    `,
+    [
+      userId
+    ]
+  );
+
+  return result.rows;
+}
+
+
+
+// Find refresh token by ID
+export async function findRefreshTokenById(id) {
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM refresh_tokens
+    WHERE id = $1;
+    `,
+    [
+      id
+    ]
   );
 
   return result.rows[0];
 }
 
-// Revoke a refresh token
-export async function revokeRefreshToken(token) {
-  await pool.query(
-    `
-    UPDATE refresh_tokens
-    SET revoked = TRUE
-    WHERE token = $1;
-    `,
-    [token]
-  );
-}
+
 
 // Revoke refresh token by ID
 export async function revokeRefreshTokenById(id) {
+
   await pool.query(
     `
     UPDATE refresh_tokens
     SET revoked = TRUE
     WHERE id = $1;
     `,
-    [id]
+    [
+      id
+    ]
   );
 }
 
 
-// Delete a refresh token
-export async function deleteRefreshToken(token) {
-  await pool.query(
-    `
-    DELETE FROM refresh_tokens
-    WHERE token = $1;
-    `,
-    [token]
-  );
-}
 
 // Revoke all refresh tokens for a user
 export async function revokeAllRefreshTokens(userId) {
+
   await pool.query(
     `
     UPDATE refresh_tokens
     SET revoked = TRUE
     WHERE user_id = $1;
     `,
-    [userId]
+    [
+      userId
+    ]
+  );
+}
+
+
+
+// Delete refresh token by ID
+export async function deleteRefreshTokenById(id) {
+
+  await pool.query(
+    `
+    DELETE FROM refresh_tokens
+    WHERE id = $1;
+    `,
+    [
+      id
+    ]
   );
 }
